@@ -2,6 +2,7 @@
 export interface Env {
   MAILCHIMP_API_KEY: string;
   MAILCHIMP_LIST_ID: string;
+  MAILCHIMP_SERVER_PREFIX?: string; // e.g., "us21" (optional override)
   DLQ: Queue; // dead-letter queue producers
 }
 
@@ -9,6 +10,10 @@ const GROUP_SIZE = 10;
 const INTER_GROUP_PAUSE_MS = 250;
 const MAX_ATTEMPTS_BEFORE_DLQ = 5;
 const BASE_BACKOFF_SECONDS = 30; // tune as needed; used for retry backoff
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function md5LowerHex(input: string): string {
   // Minimal MD5 implementation (RFC 1321) for Workers (no external deps)
@@ -94,23 +99,28 @@ function md5LowerHex(input: string): string {
 }
 
 async function upsertMember(env: Env, item: any) {
-  const [ , dc ] = env.MAILCHIMP_API_KEY.split('-');
-  if (!dc) throw new Error('MAILCHIMP_API_KEY must include data centre suffix (e.g. us21-xxxx)');
-  const hash = md5LowerHex(item.email);
+  const apiKey = env.MAILCHIMP_API_KEY;
+  const derived = apiKey?.includes('-') ? apiKey.split('-').pop() : undefined;
+  const dc = (env.MAILCHIMP_SERVER_PREFIX || derived || '').trim();
+  if (!/^us\d+$/i.test(dc)) {
+    throw new Error('Mailchimp data centre prefix missing or invalid. Set MAILCHIMP_SERVER_PREFIX or use an API key with "-usXX" suffix.');
+  }
+  const emailLc = String(item.email || '').toLowerCase();
+  const hash = md5LowerHex(emailLc);
   const url = `https://${dc}.api.mailchimp.com/3.0/lists/${env.MAILCHIMP_LIST_ID}/members/${hash}`;
 
   const body = {
-    email_address: item.email,
+    email_address: emailLc,
     status_if_new: "subscribed",
     status: "subscribed",
-    merge_fields: { FNAME: item.firstName, LNAME: item.lastName }
+    merge_fields: { FNAME: item.firstName || "", LNAME: item.lastName || "" }
   };
 
   const res = await fetch(url, {
     method: "PUT",
     headers: {
-      "authorization": "Basic " + btoa(`any:${env.MAILCHIMP_API_KEY}`),
-      "content-type": "application/json"
+      "Authorization": "Basic " + btoa(`anystring:${apiKey}`),
+      "Content-Type": "application/json"
     },
     body: JSON.stringify(body)
   });
@@ -119,7 +129,15 @@ async function upsertMember(env: Env, item: any) {
     console.warn(`mc_send retryable status=${res.status}`);
     throw new Error(`retryable ${res.status}`);
   }
-  if (!res.ok) console.warn(`mc_send nonretryable status=${res.status}`);
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    if (res.status === 401) {
+      console.warn(`mc_send nonretryable status=401 auth_error body=${txt.slice(0,200)}`);
+      return; // non-retryable; caller will DLQ after attempts
+    }
+    console.warn(`mc_send nonretryable status=${res.status} body=${txt.slice(0,200)}`);
+    return;
+  }
 }
 
 export default {
@@ -140,7 +158,8 @@ export default {
             await env.DLQ.send({ original: body, error: String((err as any)?.message ?? err), failedAt: Date.now(), attempts: nextAttempt });
             m.ack();
           } else {
-            const delay = Math.min(300, Math.pow(2, currentAttempts) * BASE_BACKOFF_SECONDS);
+            const computed = Math.pow(2, currentAttempts) * BASE_BACKOFF_SECONDS;
+            const delay = Math.max(1, Math.min(300, Number.isFinite(computed) ? computed : BASE_BACKOFF_SECONDS));
             m.retry({ delaySeconds: delay });
           }
         }
