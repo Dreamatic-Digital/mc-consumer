@@ -108,13 +108,15 @@ async function upsertMember(env: Env, item: any) {
   const emailLc = String(item.email || '').toLowerCase();
   const hash = md5LowerHex(emailLc);
   const url = `https://${dc}.api.mailchimp.com/3.0/lists/${env.MAILCHIMP_LIST_ID}/members/${hash}`;
+  console.log(`mc_send upsert dc=${dc} list=${env.MAILCHIMP_LIST_ID} hash_prefix=${hash.slice(0,6)}`);
 
-  const body = {
+  const consent = !!item.consent;
+  const body: Record<string, unknown> = {
     email_address: emailLc,
-    status_if_new: "subscribed",
-    status: "subscribed",
-    merge_fields: { FNAME: item.firstName || "", LNAME: item.lastName || "" }
+    status_if_new: consent ? "subscribed" : "pending",
+    merge_fields: { FNAME: item.firstName || "", LNAME: item.lastName || "", COUPON: item.coupon || "" }
   };
+  if (consent) body.status = "subscribed";
 
   const res = await fetch(url, {
     method: "PUT",
@@ -134,6 +136,10 @@ async function upsertMember(env: Env, item: any) {
     if (res.status === 401) {
       console.warn(`mc_send nonretryable status=401 auth_error body=${txt.slice(0,200)}`);
       return; // non-retryable; caller will DLQ after attempts
+    }
+    if (res.status === 404) {
+      console.warn(`mc_send nonretryable status=404 resource_not_found list=${env.MAILCHIMP_LIST_ID} dc=${dc}`);
+      return; // non-retryable
     }
     console.warn(`mc_send nonretryable status=${res.status} body=${txt.slice(0,200)}`);
     return;
