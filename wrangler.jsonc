@@ -1,0 +1,5 @@
+{
+  "name": "mc-consumer",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-08-11"
+}
