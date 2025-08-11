@@ -3,7 +3,16 @@
   "main": "src/index.ts",
   "compatibility_date": "2025-08-11",
   "queues": {
-    "consumers": [ { "queue": "mailchimp-intake" } ],
-    "producers": [ { "binding": "DLQ", "queue": "mailchimp-dlq" } ]
+    "consumers": [
+      { "queue": "mailchimp-intake" }
+    ],
+    "producers": [
+      { "binding": "DLQ", "queue": "mailchimp-dlq" }
+    ]
+  },
+  "observability": {
+    "logs": {
+      "enabled": true
+    }
   }
 }
