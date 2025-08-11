@@ -2,7 +2,7 @@
 export interface Env {
   MAILCHIMP_API_KEY: string;
   MAILCHIMP_LIST_ID: string;
-  DLQ: Queue; // dead-letter queue producer
+  DLQ: Queue; // dead-letter queue producers
 }
 
 const GROUP_SIZE = 10;
